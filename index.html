@@ -94,14 +94,32 @@
 
   #distance-indicator {
     position: absolute;
-    top: 62px;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 4px 16px;
-    background: rgba(0, 0, 0, 0.35);
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 10px 8px;
+    background: rgba(0, 0, 0, 0.4);
     border-radius: 8px;
     color: #cfd8dc;
-    font-size: 13px;
+    font-size: 14px;
+    font-weight: bold;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    writing-mode: horizontal-tb;
+  }
+
+  #distance-indicator.side-left {
+    left: 14px;
+  }
+
+  #distance-indicator.side-right {
+    right: 14px;
+  }
+
+  #distance-indicator .arrow {
+    font-size: 20px;
+    color: #ffd54f;
   }
 
   #winner-screen {
@@ -153,7 +171,7 @@
       <div class="healthbar"><div class="healthbar-fill" id="hp-p2"></div></div>
     </div>
     <div id="turn-indicator">Spieler 1 ist am Zug</div>
-    <div id="distance-indicator">Entfernung: 0m</div>
+    <div id="distance-indicator"><span class="arrow">→</span><span class="value">0m</span></div>
     <div id="winner-screen" class="hidden">
       <div id="winner-text"></div>
       <button id="restart-btn">Nochmal spielen</button>
@@ -360,6 +378,10 @@ const MIN_DISTANCE = 900;
 const MAX_DISTANCE = 2200;
 const WORLD_WIDTH = MAX_DISTANCE + WORLD_MARGIN * 2;
 
+// Zoomstufe während des Pfeilflugs - deutlich herausgezoomt, um das
+// Gelände zu überblicken (< 1 = mehr Weltraum sichtbar als 1:1).
+const FLIGHT_ZOOM = 0.55;
+
 let width, height, groundY;
 
 function resize() {
@@ -418,15 +440,26 @@ class Game {
     this.resetCamera();
   }
 
+  // Zeigt die Distanz an einem Bildschirmrand an - auf der Seite, zu
+  // der der Gegner tatsächlich steht - mit einem Pfeil als
+  // Richtungsangabe, statt den Gegner direkt zu zeigen.
   updateDistanceUI() {
-    if (this.distance == null) return;
-    distanceIndicator.textContent = `Entfernung: ${Math.round(this.distance / 10)}m`;
+    if (this.distance == null || !this.players.length) return;
+    const shooter = this.activePlayer;
+    const opponent = this.players.find((p) => p !== shooter);
+    const opponentIsRight = opponent.x > shooter.x;
+
+    distanceIndicator.classList.toggle("side-right", opponentIsRight);
+    distanceIndicator.classList.toggle("side-left", !opponentIsRight);
+    distanceIndicator.querySelector(".arrow").textContent = opponentIsRight ? "→" : "←";
+    distanceIndicator.querySelector(".value").textContent = `${Math.round(this.distance / 10)}m`;
   }
 
   // ---------------------------------------------------------------
   // Kamera: zeigt in Ruhe nur den aktiven Spieler (der Gegner ist in
-  // der großen Arena normalerweise außer Sicht), folgt dem Pfeil im
-  // Flug quer durch die Welt und zoomt dabei etwas rein.
+  // der großen Arena normalerweise außer Sicht), zoomt beim Abschuss
+  // heraus, damit man das Gelände im Pfeilflug überblicken kann, und
+  // kehrt danach zur nahen Sicht auf den nächsten Spieler zurück.
   // ---------------------------------------------------------------
   computeSafeIdleZoom() {
     // Zoomt so weit ein, dass der Gegner (der "distance" entfernt
@@ -459,7 +492,10 @@ class Game {
       const margin = width * 0.15;
       targetX = Math.min(Math.max(activeProjectile.x, margin), WORLD_WIDTH - margin);
       targetY = Math.min(Math.max(activeProjectile.y, height * 0.15), groundY);
-      targetZoom = 1.35;
+      // Im Flug zoomt die Kamera heraus (deutlich weiter als die enge
+      // Zielsicht), damit man das Gelände zwischen den Spielern
+      // überblicken kann, statt nur den Pfeil aus der Nähe zu sehen.
+      targetZoom = FLIGHT_ZOOM;
     } else {
       const shooter = this.activePlayer;
       targetX = shooter.x;
@@ -500,6 +536,7 @@ class Game {
     if (!this.gameOver) {
       turnIndicator.textContent = `${this.activePlayer === p1 ? "Spieler 1" : "Spieler 2"} ist am Zug`;
     }
+    this.updateDistanceUI();
   }
 
   startDrag(pos) {
