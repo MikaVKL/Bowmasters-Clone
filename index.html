@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bowmasters Clone</title>
+<link rel="stylesheet" href="src/style.css" />
+</head>
+<body>
+  <div id="ui-overlay">
+    <div class="hud" id="hud-p1">
+      <div class="name" id="name-p1">Spieler 1</div>
+      <div class="healthbar"><div class="healthbar-fill" id="hp-p1"></div></div>
+    </div>
+    <div class="hud" id="hud-p2">
+      <div class="name" id="name-p2">Spieler 2</div>
+      <div class="healthbar"><div class="healthbar-fill" id="hp-p2"></div></div>
+    </div>
+    <div id="turn-indicator">Spieler 1 ist am Zug</div>
+    <div id="winner-screen" class="hidden">
+      <div id="winner-text"></div>
+      <button id="restart-btn">Nochmal spielen</button>
+    </div>
+  </div>
+  <canvas id="game-canvas"></canvas>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
