@@ -4,7 +4,131 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Bowmasters Clone</title>
-<link rel="stylesheet" href="src/style.css" />
+<style>
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #1a1a2e;
+    font-family: "Segoe UI", Arial, sans-serif;
+    user-select: none;
+  }
+
+  #game-canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    touch-action: none;
+    cursor: crosshair;
+  }
+
+  #ui-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  .hud {
+    position: absolute;
+    top: 20px;
+    width: 220px;
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.45);
+    border-radius: 10px;
+    color: #fff;
+  }
+
+  #hud-p1 {
+    left: 20px;
+  }
+
+  #hud-p2 {
+    right: 20px;
+    text-align: right;
+  }
+
+  .name {
+    font-weight: bold;
+    font-size: 14px;
+    margin-bottom: 4px;
+  }
+
+  .healthbar {
+    width: 100%;
+    height: 14px;
+    background: #333;
+    border-radius: 7px;
+    overflow: hidden;
+    border: 2px solid #000;
+  }
+
+  .healthbar-fill {
+    height: 100%;
+    width: 100%;
+    background: linear-gradient(90deg, #4caf50, #8bc34a);
+    transition: width 0.3s ease;
+  }
+
+  .healthbar-fill.low {
+    background: linear-gradient(90deg, #e53935, #ff7043);
+  }
+
+  #turn-indicator {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 20px;
+    background: rgba(0, 0, 0, 0.45);
+    border-radius: 10px;
+    color: #ffd54f;
+    font-weight: bold;
+  }
+
+  #winner-screen {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    background: rgba(0, 0, 0, 0.7);
+    pointer-events: all;
+  }
+
+  #winner-screen.hidden {
+    display: none;
+  }
+
+  #winner-text {
+    font-size: 42px;
+    color: #ffd54f;
+    font-weight: bold;
+    text-shadow: 2px 2px 6px #000;
+  }
+
+  #restart-btn {
+    padding: 12px 28px;
+    font-size: 18px;
+    border: none;
+    border-radius: 8px;
+    background: #ffd54f;
+    cursor: pointer;
+    font-weight: bold;
+  }
+
+  #restart-btn:hover {
+    background: #ffca28;
+  }
+</style>
 </head>
 <body>
   <div id="ui-overlay">
@@ -23,6 +147,432 @@
     </div>
   </div>
   <canvas id="game-canvas"></canvas>
-  <script type="module" src="src/main.js"></script>
+
+<script>
+// ---------------------------------------------------------------------
+// Charakter-Definitionen. Neue Charaktere kommen einfach als weiterer
+// Eintrag hier rein - Farbe, Basiswerte, Fähigkeit. Die Spiellogik
+// darunter muss dafür nicht angefasst werden.
+// ---------------------------------------------------------------------
+const Characters = {
+  main: {
+    id: "main",
+    name: "Bowman",
+    color: "#8d6e63",
+    bowColor: "#5d4037",
+    maxHealth: 100,
+    ability: {
+      id: "power_shot",
+      name: "Power Shot",
+      description: "Ein normaler, kräftiger Pfeil.",
+      damage: 20,
+      projectileColor: "#f5f5f5",
+      speedMultiplier: 1,
+    },
+  },
+};
+
+function getCharacter(id) {
+  return Characters[id] ?? Characters.main;
+}
+
+// ---------------------------------------------------------------------
+// Spieler
+// ---------------------------------------------------------------------
+class Player {
+  constructor({ id, characterId, x, y, facing }) {
+    this.id = id;
+    this.character = getCharacter(characterId);
+    this.x = x;
+    this.y = y;
+    this.facing = facing; // 1 = schaut nach rechts, -1 = nach links
+    this.health = this.character.maxHealth;
+    this.aimAngle = facing === 1 ? -0.3 : Math.PI + 0.3;
+  }
+
+  get isAlive() {
+    return this.health > 0;
+  }
+
+  takeDamage(amount) {
+    this.health = Math.max(0, this.health - amount);
+  }
+
+  draw(ctx) {
+    const { x, y } = this;
+    const flip = this.facing;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(flip, 1);
+
+    // Beine
+    ctx.strokeStyle = "#3e2723";
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.moveTo(-10, 0);
+    ctx.lineTo(-14, 40);
+    ctx.moveTo(10, 0);
+    ctx.lineTo(14, 40);
+    ctx.stroke();
+
+    // Körper
+    ctx.fillStyle = this.character.color;
+    ctx.beginPath();
+    ctx.ellipse(0, -30, 22, 32, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Kopf
+    ctx.fillStyle = "#ffccbc";
+    ctx.beginPath();
+    ctx.arc(0, -68, 16, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Bogen
+    ctx.strokeStyle = this.character.bowColor;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(26, -35, 22, -1.1, 1.1);
+    ctx.stroke();
+
+    ctx.restore();
+
+    // Ziellinie
+    if (this.isAlive) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,255,255,0.5)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.moveTo(x, y - 35);
+      ctx.lineTo(
+        x + Math.cos(this.aimAngle) * 60,
+        y - 35 + Math.sin(this.aimAngle) * 60
+      );
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// Projektil
+// ---------------------------------------------------------------------
+const GRAVITY = 900; // px/s^2
+
+class Projectile {
+  constructor({ x, y, vx, vy, damage, color, ownerId }) {
+    this.x = x;
+    this.y = y;
+    this.vx = vx;
+    this.vy = vy;
+    this.damage = damage;
+    this.color = color;
+    this.ownerId = ownerId;
+    this.dead = false;
+    this.trail = [];
+  }
+
+  update(dt) {
+    this.trail.push({ x: this.x, y: this.y });
+    if (this.trail.length > 12) this.trail.shift();
+
+    this.vy += GRAVITY * dt;
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+  }
+
+  get angle() {
+    return Math.atan2(this.vy, this.vx);
+  }
+
+  draw(ctx) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.25)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    this.trail.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle);
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.moveTo(14, 0);
+    ctx.lineTo(-10, -4);
+    ctx.lineTo(-10, 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ---------------------------------------------------------------------
+// Spiel
+// ---------------------------------------------------------------------
+const canvas = document.getElementById("game-canvas");
+const ctx = canvas.getContext("2d");
+
+const hpFillP1 = document.getElementById("hp-p1");
+const hpFillP2 = document.getElementById("hp-p2");
+const turnIndicator = document.getElementById("turn-indicator");
+const winnerScreen = document.getElementById("winner-screen");
+const winnerText = document.getElementById("winner-text");
+const restartBtn = document.getElementById("restart-btn");
+
+const MAX_DRAG = 140;
+const POWER_TO_SPEED = 6;
+
+let width, height, groundY;
+
+function resize() {
+  width = canvas.width = window.innerWidth;
+  height = canvas.height = window.innerHeight;
+  groundY = height - 90;
+  if (game) game.layout();
+}
+window.addEventListener("resize", resize);
+
+class Game {
+  constructor() {
+    this.reset();
+  }
+
+  reset() {
+    this.players = [
+      new Player({ id: "p1", characterId: "main", x: 0, y: 0, facing: 1 }),
+      new Player({ id: "p2", characterId: "main", x: 0, y: 0, facing: -1 }),
+    ];
+    this.layout();
+    this.turn = 0; // Index in players
+    this.projectiles = [];
+    this.isDragging = false;
+    this.dragStart = null;
+    this.dragCurrent = null;
+    this.gameOver = false;
+    winnerScreen.classList.add("hidden");
+    this.updateHud();
+  }
+
+  layout() {
+    if (!width) return;
+    this.players[0].x = width * 0.2;
+    this.players[0].y = groundY;
+    this.players[1].x = width * 0.8;
+    this.players[1].y = groundY;
+  }
+
+  get activePlayer() {
+    return this.players[this.turn];
+  }
+
+  updateHud() {
+    const [p1, p2] = this.players;
+    hpFillP1.style.width = `${(p1.health / p1.character.maxHealth) * 100}%`;
+    hpFillP2.style.width = `${(p2.health / p2.character.maxHealth) * 100}%`;
+    hpFillP1.classList.toggle("low", p1.health / p1.character.maxHealth < 0.3);
+    hpFillP2.classList.toggle("low", p2.health / p2.character.maxHealth < 0.3);
+
+    if (!this.gameOver) {
+      turnIndicator.textContent = `${this.activePlayer === p1 ? "Spieler 1" : "Spieler 2"} ist am Zug`;
+    }
+  }
+
+  startDrag(pos) {
+    if (this.gameOver || this.projectiles.length > 0) return;
+    this.isDragging = true;
+    this.dragStart = pos;
+    this.dragCurrent = pos;
+  }
+
+  updateDrag(pos) {
+    if (!this.isDragging) return;
+    this.dragCurrent = pos;
+
+    const dx = this.dragStart.x - pos.x;
+    const dy = this.dragStart.y - pos.y;
+    const angle = Math.atan2(dy, dx);
+    this.activePlayer.aimAngle = angle;
+  }
+
+  endDrag() {
+    if (!this.isDragging) return;
+    this.isDragging = false;
+
+    const dx = this.dragStart.x - this.dragCurrent.x;
+    const dy = this.dragStart.y - this.dragCurrent.y;
+    const dist = Math.min(Math.hypot(dx, dy), MAX_DRAG);
+    if (dist < 12) return; // zu klein, als Tap ignorieren
+
+    const angle = Math.atan2(dy, dx);
+    const power = dist * POWER_TO_SPEED;
+    const ability = this.activePlayer.character.ability;
+
+    const shooter = this.activePlayer;
+    this.projectiles.push(
+      new Projectile({
+        x: shooter.x + Math.cos(angle) * 40,
+        y: shooter.y - 35 + Math.sin(angle) * 40,
+        vx: Math.cos(angle) * power * ability.speedMultiplier,
+        vy: Math.sin(angle) * power * ability.speedMultiplier,
+        damage: ability.damage,
+        color: ability.projectileColor,
+        ownerId: shooter.id,
+      })
+    );
+  }
+
+  update(dt) {
+    this.projectiles.forEach((p) => p.update(dt));
+
+    for (const proj of this.projectiles) {
+      if (proj.dead) continue;
+
+      if (proj.y > height + 100 || proj.x < -100 || proj.x > width + 100) {
+        proj.dead = true;
+        continue;
+      }
+
+      for (const target of this.players) {
+        if (target.id === proj.ownerId || !target.isAlive) continue;
+        const dx = proj.x - target.x;
+        const dy = proj.y - (target.y - 40);
+        if (Math.hypot(dx, dy) < 34) {
+          target.takeDamage(proj.damage);
+          proj.dead = true;
+          this.onHit(target);
+          break;
+        }
+      }
+
+      if (!proj.dead && proj.y >= groundY) {
+        proj.dead = true;
+      }
+    }
+
+    this.projectiles = this.projectiles.filter((p) => !p.dead);
+  }
+
+  onHit(target) {
+    this.updateHud();
+    if (!target.isAlive) {
+      this.endGame(this.activePlayer);
+      return;
+    }
+    this.nextTurn();
+  }
+
+  nextTurn() {
+    this.turn = (this.turn + 1) % 2;
+    this.updateHud();
+  }
+
+  endGame(winner) {
+    this.gameOver = true;
+    const label = winner === this.players[0] ? "Spieler 1" : "Spieler 2";
+    winnerText.textContent = `${label} gewinnt!`;
+    winnerScreen.classList.remove("hidden");
+  }
+
+  draw() {
+    ctx.clearRect(0, 0, width, height);
+
+    // Himmel
+    const sky = ctx.createLinearGradient(0, 0, 0, height);
+    sky.addColorStop(0, "#1e2a4a");
+    sky.addColorStop(1, "#4a3a5a");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, width, height);
+
+    // Boden
+    ctx.fillStyle = "#3e2723";
+    ctx.fillRect(0, groundY + 40, width, height - groundY - 40);
+    ctx.fillStyle = "#5d4037";
+    ctx.fillRect(0, groundY + 40, width, 8);
+
+    this.players.forEach((p) => p.draw(ctx));
+    this.projectiles.forEach((p) => p.draw(ctx));
+
+    if (this.isDragging) {
+      const shooter = this.activePlayer;
+      const dx = this.dragStart.x - this.dragCurrent.x;
+      const dy = this.dragStart.y - this.dragCurrent.y;
+      const dist = Math.min(Math.hypot(dx, dy), MAX_DRAG);
+      const angle = Math.atan2(dy, dx);
+
+      ctx.save();
+      ctx.strokeStyle = "#ffd54f";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(shooter.x, shooter.y - 35);
+      ctx.lineTo(
+        shooter.x + Math.cos(angle) * dist,
+        shooter.y - 35 + Math.sin(angle) * dist
+      );
+      ctx.stroke();
+
+      // Kraftanzeige
+      ctx.fillStyle = "rgba(255,255,255,0.15)";
+      ctx.fillRect(shooter.x - 30, shooter.y - 120, 60, 12);
+      ctx.fillStyle = "#ffd54f";
+      ctx.fillRect(shooter.x - 30, shooter.y - 120, 60 * (dist / MAX_DRAG), 12);
+      ctx.restore();
+    }
+  }
+}
+
+let game;
+
+function loop(timestamp) {
+  if (!loop.last) loop.last = timestamp;
+  const dt = Math.min((timestamp - loop.last) / 1000, 0.033);
+  loop.last = timestamp;
+
+  game.update(dt);
+  game.draw();
+
+  requestAnimationFrame(loop);
+}
+
+function getPos(evt) {
+  const rect = canvas.getBoundingClientRect();
+  const point = evt.touches ? evt.touches[0] : evt;
+  return { x: point.clientX - rect.left, y: point.clientY - rect.top };
+}
+
+function attachInput() {
+  canvas.addEventListener("mousedown", (e) => game.startDrag(getPos(e)));
+  canvas.addEventListener("mousemove", (e) => game.updateDrag(getPos(e)));
+  window.addEventListener("mouseup", () => game.endDrag());
+
+  canvas.addEventListener(
+    "touchstart",
+    (e) => {
+      e.preventDefault();
+      game.startDrag(getPos(e));
+    },
+    { passive: false }
+  );
+  canvas.addEventListener(
+    "touchmove",
+    (e) => {
+      e.preventDefault();
+      game.updateDrag(getPos(e));
+    },
+    { passive: false }
+  );
+  window.addEventListener("touchend", () => game.endDrag());
+
+  restartBtn.addEventListener("click", () => game.reset());
+}
+
+resize();
+game = new Game();
+attachInput();
+requestAnimationFrame(loop);
+</script>
 </body>
 </html>
