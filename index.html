@@ -92,6 +92,18 @@
     font-weight: bold;
   }
 
+  #distance-indicator {
+    position: absolute;
+    top: 62px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 4px 16px;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 8px;
+    color: #cfd8dc;
+    font-size: 13px;
+  }
+
   #winner-screen {
     position: absolute;
     inset: 0;
@@ -141,6 +153,7 @@
       <div class="healthbar"><div class="healthbar-fill" id="hp-p2"></div></div>
     </div>
     <div id="turn-indicator">Spieler 1 ist am Zug</div>
+    <div id="distance-indicator">Entfernung: 0m</div>
     <div id="winner-screen" class="hidden">
       <div id="winner-text"></div>
       <button id="restart-btn">Nochmal spielen</button>
@@ -330,12 +343,22 @@ const ctx = canvas.getContext("2d");
 const hpFillP1 = document.getElementById("hp-p1");
 const hpFillP2 = document.getElementById("hp-p2");
 const turnIndicator = document.getElementById("turn-indicator");
+const distanceIndicator = document.getElementById("distance-indicator");
 const winnerScreen = document.getElementById("winner-screen");
 const winnerText = document.getElementById("winner-text");
 const restartBtn = document.getElementById("restart-btn");
 
-const MAX_DRAG = 140;
-const POWER_TO_SPEED = 6;
+const MAX_DRAG = 170;
+const POWER_TO_SPEED = 9;
+
+// Die Arena ist viel breiter als der Bildschirm: die Spieler stehen an
+// zufälligen, unterschiedlich weit auseinander liegenden Positionen,
+// damit man nicht jedes Mal denselben Winkel/dieselbe Kraft schießen
+// kann. groundY bleibt bildschirmbezogen (Boden ist immer unten).
+const WORLD_MARGIN = 400;
+const MIN_DISTANCE = 900;
+const MAX_DISTANCE = 2200;
+const WORLD_WIDTH = MAX_DISTANCE + WORLD_MARGIN * 2;
 
 let width, height, groundY;
 
@@ -357,7 +380,6 @@ class Game {
       new Player({ id: "p1", characterId: "main", x: 0, y: 0, facing: 1 }),
       new Player({ id: "p2", characterId: "main", x: 0, y: 0, facing: -1 }),
     ];
-    this.layout();
     this.turn = 0; // Index in players
     this.projectiles = [];
     this.hitTexts = [];
@@ -368,32 +390,60 @@ class Game {
     this.shake = 0;
     winnerScreen.classList.add("hidden");
     this.updateHud();
-    this.resetCamera();
+    this.randomizeArena();
   }
 
+  // Neue Runde: zufälliger Abstand zwischen den Spielern, an
+  // zufälliger Stelle in der (viel breiteren) Arena platziert.
+  randomizeArena() {
+    if (!width) return;
+    const distance = MIN_DISTANCE + Math.random() * (MAX_DISTANCE - MIN_DISTANCE);
+    const usableWidth = WORLD_WIDTH - WORLD_MARGIN * 2 - distance;
+    const p1X = WORLD_MARGIN + Math.random() * Math.max(0, usableWidth);
+
+    this.players[0].x = p1X;
+    this.players[1].x = p1X + distance;
+    this.distance = distance;
+    this.updateDistanceUI();
+    this.layout();
+  }
+
+  // Wird auch bei Fenstergröße-Änderungen aufgerufen - verändert nur
+  // bildschirmabhängige Werte, nie die Arena-Zufallswerte selbst.
   layout() {
     if (!width) return;
-    this.players[0].x = width * 0.2;
     this.players[0].y = groundY;
-    this.players[1].x = width * 0.8;
     this.players[1].y = groundY;
+    this.idleZoom = this.computeSafeIdleZoom();
     this.resetCamera();
   }
 
+  updateDistanceUI() {
+    if (this.distance == null) return;
+    distanceIndicator.textContent = `Entfernung: ${Math.round(this.distance / 10)}m`;
+  }
+
   // ---------------------------------------------------------------
-  // Kamera: folgt dem Pfeil im Flug und zoomt leicht rein, kehrt
-  // danach sanft zur Übersicht über beide Spieler zurück.
+  // Kamera: zeigt in Ruhe nur den aktiven Spieler (der Gegner ist in
+  // der großen Arena normalerweise außer Sicht), folgt dem Pfeil im
+  // Flug quer durch die Welt und zoomt dabei etwas rein.
   // ---------------------------------------------------------------
+  computeSafeIdleZoom() {
+    // Zoomt so weit ein, dass der Gegner (der "distance" entfernt
+    // steht) garantiert außerhalb des sichtbaren Bereichs bleibt,
+    // egal wie breit der Bildschirm oder wie klein der Abstand ist.
+    const distance = this.distance ?? MIN_DISTANCE;
+    const desiredHalfView = distance * 0.42;
+    return Math.max(1, width / 2 / desiredHalfView);
+  }
+
   resetCamera() {
     if (!width) return;
-    const defaultX = (this.players[0].x + this.players[1].x) / 2;
-    const defaultY = groundY - height * 0.18;
+    const shooter = this.players[this.turn];
     this.camera = {
-      x: defaultX,
-      y: defaultY,
-      zoom: 1,
-      defaultX,
-      defaultY,
+      x: shooter.x,
+      y: groundY - height * 0.18,
+      zoom: this.idleZoom,
     };
   }
 
@@ -401,15 +451,20 @@ class Game {
     const cam = this.camera;
     const activeProjectile = this.projectiles[0];
 
-    let targetX = cam.defaultX;
-    let targetY = cam.defaultY;
-    let targetZoom = 1;
+    let targetX;
+    let targetY;
+    let targetZoom;
 
     if (activeProjectile) {
       const margin = width * 0.15;
-      targetX = Math.min(Math.max(activeProjectile.x, margin), width - margin);
+      targetX = Math.min(Math.max(activeProjectile.x, margin), WORLD_WIDTH - margin);
       targetY = Math.min(Math.max(activeProjectile.y, height * 0.15), groundY);
       targetZoom = 1.35;
+    } else {
+      const shooter = this.activePlayer;
+      targetX = shooter.x;
+      targetY = groundY - height * 0.18;
+      targetZoom = this.idleZoom;
     }
 
     const followSpeed = 4.5; // je höher, desto schneller reagiert die Kamera
@@ -506,7 +561,7 @@ class Game {
 
       let hit = false;
 
-      if (proj.y > height + 100 || proj.x < -100 || proj.x > width + 100) {
+      if (proj.y > height + 100 || proj.x < -100 || proj.x > WORLD_WIDTH + 100) {
         proj.dead = true;
       } else {
         for (const target of this.players) {
@@ -598,13 +653,13 @@ class Game {
     ctx.scale(cam.zoom, cam.zoom);
     ctx.translate(-cam.x, -cam.y);
 
-    // Boden (breiter als der Bildschirm, damit Kameraschwenks nie den
+    // Boden (deckt die gesamte Arena ab, damit Kameraschwenks nie den
     // Rand zeigen)
-    const groundPad = width;
+    const groundPad = WORLD_MARGIN;
     ctx.fillStyle = "#3e2723";
-    ctx.fillRect(-groundPad, groundY + 40, width + groundPad * 2, height);
+    ctx.fillRect(-groundPad, groundY + 40, WORLD_WIDTH + groundPad * 2, height);
     ctx.fillStyle = "#5d4037";
-    ctx.fillRect(-groundPad, groundY + 40, width + groundPad * 2, 8);
+    ctx.fillRect(-groundPad, groundY + 40, WORLD_WIDTH + groundPad * 2, 8);
 
     this.players.forEach((p) => p.draw(ctx));
     this.projectiles.forEach((p) => p.draw(ctx));
@@ -622,8 +677,15 @@ class Game {
       ctx.restore();
     });
 
+    ctx.restore();
+
+    // Zielhilfe & Kraftanzeige werden bewusst in Bildschirmkoordinaten
+    // (außerhalb der Kamera-Transformation) gezeichnet, damit sie 1:1
+    // der Mausbewegung folgen, unabhängig vom aktuellen Kamera-Zoom.
     if (this.isDragging) {
       const shooter = this.activePlayer;
+      const shooterScreenX = width / 2 + (shooter.x - cam.x) * cam.zoom;
+      const shooterScreenY = height / 2 + (shooter.y - 35 - cam.y) * cam.zoom;
       const dx = this.dragStart.x - this.dragCurrent.x;
       const dy = this.dragStart.y - this.dragCurrent.y;
       const dist = Math.min(Math.hypot(dx, dy), MAX_DRAG);
@@ -633,22 +695,20 @@ class Game {
       ctx.strokeStyle = "#ffd54f";
       ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.moveTo(shooter.x, shooter.y - 35);
+      ctx.moveTo(shooterScreenX, shooterScreenY);
       ctx.lineTo(
-        shooter.x + Math.cos(angle) * dist,
-        shooter.y - 35 + Math.sin(angle) * dist
+        shooterScreenX + Math.cos(angle) * dist,
+        shooterScreenY + Math.sin(angle) * dist
       );
       ctx.stroke();
 
       // Kraftanzeige
       ctx.fillStyle = "rgba(255,255,255,0.15)";
-      ctx.fillRect(shooter.x - 30, shooter.y - 120, 60, 12);
+      ctx.fillRect(shooterScreenX - 30, shooterScreenY - 85, 60, 12);
       ctx.fillStyle = "#ffd54f";
-      ctx.fillRect(shooter.x - 30, shooter.y - 120, 60 * (dist / MAX_DRAG), 12);
+      ctx.fillRect(shooterScreenX - 30, shooterScreenY - 85, 60 * (dist / MAX_DRAG), 12);
       ctx.restore();
     }
-
-    ctx.restore();
   }
 }
 
