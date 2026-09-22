@@ -165,7 +165,8 @@ const Characters = {
       id: "power_shot",
       name: "Power Shot",
       description: "Ein normaler, kräftiger Pfeil.",
-      damage: 20,
+      damage: 20, // Körpertreffer
+      headshotDamage: 40, // Kopftreffer - doppelter Schaden
       projectileColor: "#f5f5f5",
       speedMultiplier: 1,
     },
@@ -175,6 +176,16 @@ const Characters = {
 function getCharacter(id) {
   return Characters[id] ?? Characters.main;
 }
+
+// ---------------------------------------------------------------------
+// Trefferzonen (relativ zur Spielerposition) - von Zeichnen und
+// Kollisionserkennung gemeinsam genutzt, damit Hitbox und Grafik
+// immer übereinstimmen.
+// ---------------------------------------------------------------------
+const HEAD_OFFSET_Y = -68;
+const HEAD_RADIUS = 20;
+const BODY_OFFSET_Y = -30;
+const BODY_RADIUS = 34;
 
 // ---------------------------------------------------------------------
 // Spieler
@@ -219,13 +230,13 @@ class Player {
     // Körper
     ctx.fillStyle = this.character.color;
     ctx.beginPath();
-    ctx.ellipse(0, -30, 22, 32, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, BODY_OFFSET_Y, 22, 32, 0, 0, Math.PI * 2);
     ctx.fill();
 
     // Kopf
     ctx.fillStyle = "#ffccbc";
     ctx.beginPath();
-    ctx.arc(0, -68, 16, 0, Math.PI * 2);
+    ctx.arc(0, HEAD_OFFSET_Y, 16, 0, Math.PI * 2);
     ctx.fill();
 
     // Bogen
@@ -349,12 +360,15 @@ class Game {
     this.layout();
     this.turn = 0; // Index in players
     this.projectiles = [];
+    this.hitTexts = [];
     this.isDragging = false;
     this.dragStart = null;
     this.dragCurrent = null;
     this.gameOver = false;
+    this.shake = 0;
     winnerScreen.classList.add("hidden");
     this.updateHud();
+    this.resetCamera();
   }
 
   layout() {
@@ -363,6 +377,58 @@ class Game {
     this.players[0].y = groundY;
     this.players[1].x = width * 0.8;
     this.players[1].y = groundY;
+    this.resetCamera();
+  }
+
+  // ---------------------------------------------------------------
+  // Kamera: folgt dem Pfeil im Flug und zoomt leicht rein, kehrt
+  // danach sanft zur Übersicht über beide Spieler zurück.
+  // ---------------------------------------------------------------
+  resetCamera() {
+    if (!width) return;
+    const defaultX = (this.players[0].x + this.players[1].x) / 2;
+    const defaultY = groundY - height * 0.18;
+    this.camera = {
+      x: defaultX,
+      y: defaultY,
+      zoom: 1,
+      defaultX,
+      defaultY,
+    };
+  }
+
+  updateCamera(dt) {
+    const cam = this.camera;
+    const activeProjectile = this.projectiles[0];
+
+    let targetX = cam.defaultX;
+    let targetY = cam.defaultY;
+    let targetZoom = 1;
+
+    if (activeProjectile) {
+      const margin = width * 0.15;
+      targetX = Math.min(Math.max(activeProjectile.x, margin), width - margin);
+      targetY = Math.min(Math.max(activeProjectile.y, height * 0.15), groundY);
+      targetZoom = 1.35;
+    }
+
+    const followSpeed = 4.5; // je höher, desto schneller reagiert die Kamera
+    const t = 1 - Math.exp(-followSpeed * dt);
+    cam.x += (targetX - cam.x) * t;
+    cam.y += (targetY - cam.y) * t;
+    cam.zoom += (targetZoom - cam.zoom) * t;
+
+    if (this.shake > 0) {
+      this.shake = Math.max(0, this.shake - dt * 3);
+    }
+  }
+
+  spawnHitText(x, y, text, color) {
+    this.hitTexts.push({ x, y, text, color, life: 1 });
+  }
+
+  triggerImpactShake() {
+    this.shake = 1;
   }
 
   get activePlayer() {
@@ -427,6 +493,13 @@ class Game {
 
   update(dt) {
     this.projectiles.forEach((p) => p.update(dt));
+    this.updateCamera(dt);
+
+    this.hitTexts.forEach((t) => {
+      t.y -= 40 * dt;
+      t.life -= dt * 1.2;
+    });
+    this.hitTexts = this.hitTexts.filter((t) => t.life > 0);
 
     for (const proj of this.projectiles) {
       if (proj.dead) continue;
@@ -438,12 +511,29 @@ class Game {
       } else {
         for (const target of this.players) {
           if (target.id === proj.ownerId || !target.isAlive) continue;
-          const dx = proj.x - target.x;
-          const dy = proj.y - (target.y - 40);
-          if (Math.hypot(dx, dy) < 34) {
-            target.takeDamage(proj.damage);
+
+          const ability = this.activePlayer.character.ability;
+          const headDx = proj.x - target.x;
+          const headDy = proj.y - (target.y + HEAD_OFFSET_Y);
+          const bodyDx = proj.x - target.x;
+          const bodyDy = proj.y - (target.y + BODY_OFFSET_Y);
+
+          if (Math.hypot(headDx, headDy) < HEAD_RADIUS) {
+            target.takeDamage(ability.headshotDamage);
+            this.spawnHitText(target.x, target.y + HEAD_OFFSET_Y, "HEADSHOT!", "#ff5252");
             proj.dead = true;
             hit = true;
+            this.triggerImpactShake();
+            this.onHit(target);
+            break;
+          }
+
+          if (Math.hypot(bodyDx, bodyDy) < BODY_RADIUS) {
+            target.takeDamage(ability.damage);
+            this.spawnHitText(target.x, target.y + BODY_OFFSET_Y, `-${ability.damage}`, "#ffd54f");
+            proj.dead = true;
+            hit = true;
+            this.triggerImpactShake();
             this.onHit(target);
             break;
           }
@@ -487,21 +577,50 @@ class Game {
   draw() {
     ctx.clearRect(0, 0, width, height);
 
-    // Himmel
+    // Himmel (bildschirmfest, nicht Teil der Kamerawelt)
     const sky = ctx.createLinearGradient(0, 0, 0, height);
     sky.addColorStop(0, "#1e2a4a");
     sky.addColorStop(1, "#4a3a5a");
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, width, height);
 
-    // Boden
+    // Kamera-Transform: alles ab hier ist Weltraum und bewegt/zoomt
+    // sich mit dem Pfeilflug mit.
+    ctx.save();
+    const cam = this.camera;
+    let shakeX = 0;
+    let shakeY = 0;
+    if (this.shake > 0) {
+      shakeX = (Math.random() - 0.5) * 10 * this.shake;
+      shakeY = (Math.random() - 0.5) * 10 * this.shake;
+    }
+    ctx.translate(width / 2 + shakeX, height / 2 + shakeY);
+    ctx.scale(cam.zoom, cam.zoom);
+    ctx.translate(-cam.x, -cam.y);
+
+    // Boden (breiter als der Bildschirm, damit Kameraschwenks nie den
+    // Rand zeigen)
+    const groundPad = width;
     ctx.fillStyle = "#3e2723";
-    ctx.fillRect(0, groundY + 40, width, height - groundY - 40);
+    ctx.fillRect(-groundPad, groundY + 40, width + groundPad * 2, height);
     ctx.fillStyle = "#5d4037";
-    ctx.fillRect(0, groundY + 40, width, 8);
+    ctx.fillRect(-groundPad, groundY + 40, width + groundPad * 2, 8);
 
     this.players.forEach((p) => p.draw(ctx));
     this.projectiles.forEach((p) => p.draw(ctx));
+
+    this.hitTexts.forEach((t) => {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, t.life);
+      ctx.fillStyle = t.color;
+      ctx.font = "bold 22px 'Segoe UI', Arial, sans-serif";
+      ctx.textAlign = "center";
+      ctx.strokeStyle = "rgba(0,0,0,0.6)";
+      ctx.lineWidth = 3;
+      ctx.strokeText(t.text, t.x, t.y);
+      ctx.fillText(t.text, t.x, t.y);
+      ctx.restore();
+    });
 
     if (this.isDragging) {
       const shooter = this.activePlayer;
@@ -528,6 +647,8 @@ class Game {
       ctx.fillRect(shooter.x - 30, shooter.y - 120, 60 * (dist / MAX_DRAG), 12);
       ctx.restore();
     }
+
+    ctx.restore();
   }
 }
 
