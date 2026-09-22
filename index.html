@@ -353,26 +353,43 @@ class Player {
     ctx.arc(0, HEAD_OFFSET_Y, 16, 0, Math.PI * 2);
     ctx.fill();
 
-    // Bogen
-    ctx.strokeStyle = this.character.bowColor;
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(26, -35, 22, -1.1, 1.1);
-    ctx.stroke();
-
     ctx.restore();
 
-    // Ziellinie
+    // Bogen & Ziellinie: bewusst außerhalb des Flip-Transforms und
+    // direkt anhand von aimAngle gezeichnet, damit der Bogen sich
+    // wirklich mit der Zugrichtung mitdreht statt in einem starren
+    // 90°-Winkel "eingefroren" zu sein.
     if (this.isAlive) {
+      const handX = x;
+      const handY = y - 35;
+
+      ctx.save();
+      ctx.translate(handX, handY);
+      ctx.rotate(this.aimAngle);
+      ctx.strokeStyle = this.character.bowColor;
+      ctx.lineWidth = 4;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.arc(0, 0, 22, -1.15, 1.15);
+      ctx.stroke();
+      // Sehne
+      ctx.strokeStyle = "rgba(230,220,200,0.8)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(-1.15) * 22, Math.sin(-1.15) * 22);
+      ctx.lineTo(Math.cos(1.15) * 22, Math.sin(1.15) * 22);
+      ctx.stroke();
+      ctx.restore();
+
       ctx.save();
       ctx.strokeStyle = "rgba(255,255,255,0.5)";
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 6]);
       ctx.beginPath();
-      ctx.moveTo(x, y - 35);
+      ctx.moveTo(handX, handY);
       ctx.lineTo(
-        x + Math.cos(this.aimAngle) * 60,
-        y - 35 + Math.sin(this.aimAngle) * 60
+        handX + Math.cos(this.aimAngle) * 60,
+        handY + Math.sin(this.aimAngle) * 60
       );
       ctx.stroke();
       ctx.restore();
@@ -455,39 +472,19 @@ const restartBtn = document.getElementById("restart-btn");
 const MAX_DRAG = 210;
 const POWER_TO_SPEED = 10;
 
-// Ein Schuss darf nie flach/waagerecht abgefeuert werden - es muss
-// immer ein Mindestbogen dabei sein. In Kombination mit der Schwerkraft
-// reicht die Kraft am oberen Ende der Distanz nur noch für einen
-// engen Winkelbereich um 45°, man muss also wirklich höher zielen,
-// nicht einfach nur "in Richtung Gegner" ziehen.
-const MIN_LAUNCH_ANGLE = (22 * Math.PI) / 180;
-
 // Die Arena ist viel breiter als der Bildschirm: die Spieler stehen an
 // zufälligen, unterschiedlich weit auseinander liegenden Positionen,
 // damit man nicht jedes Mal denselben Winkel/dieselbe Kraft schießen
 // kann. groundY bleibt bildschirmbezogen (Boden ist immer unten).
-// Größerer Abstand = schwerer zu treffen, man braucht mehr Kraft und
-// einen präziseren Winkel.
+// Größerer Abstand = schwerer zu treffen, man braucht mehr Kraft.
+// Statt einer künstlichen Winkel-Sperre sorgen Hügel im Gelände
+// dafür, dass ein rein waagerechter Schuss oft gar nicht erst bis
+// zum Gegner kommt - man zielt frei, muss aber manchmal drüber
+// lupfen.
 const WORLD_MARGIN = 500;
 const MIN_DISTANCE = 1800;
 const MAX_DISTANCE = 3400;
 const WORLD_WIDTH = MAX_DISTANCE + WORLD_MARGIN * 2;
-
-// Erzwingt den Mindest-Abschusswinkel: ein zu flach oder gar nach
-// unten gezogener Schuss wird auf die nächstgelegene gültige
-// Bogen-Richtung "hochgezogen" (rechts- oder linksseitig, je
-// nachdem, in welche Richtung gezogen wurde).
-function clampLaunchAngle(angle) {
-  const upperFlatRight = 0;
-  const upperFlatLeft = -Math.PI;
-  if (angle <= upperFlatRight && angle > upperFlatRight - MIN_LAUNCH_ANGLE) {
-    return upperFlatRight - MIN_LAUNCH_ANGLE;
-  }
-  if (angle >= upperFlatLeft && angle < upperFlatLeft + MIN_LAUNCH_ANGLE) {
-    return upperFlatLeft + MIN_LAUNCH_ANGLE;
-  }
-  return angle;
-}
 
 // Zoomstufe während des Pfeilflugs - deutlich herausgezoomt, um das
 // Gelände zu überblicken (< 1 = mehr Weltraum sichtbar als 1:1).
@@ -528,7 +525,8 @@ class Game {
   }
 
   // Neue Runde: zufälliger Abstand zwischen den Spielern, an
-  // zufälliger Stelle in der (viel breiteren) Arena platziert.
+  // zufälliger Stelle in der (viel breiteren) Arena platziert, plus
+  // neues Gelände (Hügel zwischen den Spielern, Bäume überall).
   randomizeArena() {
     if (!width) return;
     const distance = MIN_DISTANCE + Math.random() * (MAX_DISTANCE - MIN_DISTANCE);
@@ -538,16 +536,64 @@ class Game {
     this.players[0].x = p1X;
     this.players[1].x = p1X + distance;
     this.distance = distance;
+    this.hills = this.generateHills(p1X, p1X + distance);
+    this.trees = this.generateTrees();
     this.updateDistanceUI();
     this.layout();
+  }
+
+  // Hügel liegen (überwiegend) zwischen den beiden Spielern und
+  // wirken als echtes Hindernis: ein flacher Schuss kracht in den
+  // Hang statt beim Gegner anzukommen - man muss drüber zielen,
+  // nicht weil eine Regel es verlangt, sondern weil der Weg sonst
+  // blockiert ist.
+  generateHills(p1X, p2X) {
+    const gapStart = Math.min(p1X, p2X) + 200;
+    const gapEnd = Math.max(p1X, p2X) - 200;
+    const hills = [];
+    if (gapEnd > gapStart) {
+      const count = 1 + Math.floor(Math.random() * 2); // 1-2 Hügel
+      for (let i = 0; i < count; i++) {
+        hills.push({
+          centerX: gapStart + Math.random() * (gapEnd - gapStart),
+          width: 220 + Math.random() * 280,
+          height: 90 + Math.random() * 180,
+        });
+      }
+    }
+    return hills;
+  }
+
+  // Höhe der Geländeoberfläche (Welt-Y) an einer bestimmten Welt-X-
+  // Position - Summe sanfter Glockenkurven-Hügel über der Basislinie.
+  terrainHeightAt(x) {
+    let bump = 0;
+    for (const h of this.hills) {
+      const t = (x - h.centerX) / h.width;
+      bump += h.height * Math.exp(-t * t * 4);
+    }
+    return groundY - bump;
+  }
+
+  generateTrees() {
+    const trees = [];
+    const count = 18 + Math.floor(Math.random() * 10);
+    for (let i = 0; i < count; i++) {
+      trees.push({
+        x: WORLD_MARGIN * 0.3 + Math.random() * (WORLD_WIDTH - WORLD_MARGIN * 0.6),
+        scale: 0.65 + Math.random() * 0.75,
+        tone: Math.random(),
+      });
+    }
+    return trees;
   }
 
   // Wird auch bei Fenstergröße-Änderungen aufgerufen - verändert nur
   // bildschirmabhängige Werte, nie die Arena-Zufallswerte selbst.
   layout() {
     if (!width) return;
-    this.players[0].y = groundY;
-    this.players[1].y = groundY;
+    this.players[0].y = this.terrainHeightAt(this.players[0].x);
+    this.players[1].y = this.terrainHeightAt(this.players[1].x);
     this.idleZoom = this.computeSafeIdleZoom();
     this.resetCamera();
   }
@@ -661,15 +707,15 @@ class Game {
     this.dragCurrent = pos;
   }
 
-  // Berechnet aus dem aktuellen Drag Distanz + Winkel - inklusive
-  // Mindestbogen. Wird von der Zughilfe-Vorschau, der Ziellinie und
-  // dem tatsächlichen Schuss gemeinsam genutzt, damit alle drei
-  // exakt übereinstimmen.
+  // Berechnet aus dem aktuellen Drag Distanz + Winkel - vollkommen
+  // frei, keine künstliche Winkel-Sperre. Wird von der Zughilfe-
+  // Vorschau, der Ziellinie und dem tatsächlichen Schuss gemeinsam
+  // genutzt, damit alle drei exakt übereinstimmen.
   getDragShot() {
     const dx = this.dragStart.x - this.dragCurrent.x;
     const dy = this.dragStart.y - this.dragCurrent.y;
     const dist = Math.min(Math.hypot(dx, dy), MAX_DRAG);
-    const angle = clampLaunchAngle(Math.atan2(dy, dx));
+    const angle = Math.atan2(dy, dx);
     return { dist, angle };
   }
 
@@ -753,7 +799,7 @@ class Game {
           }
         }
 
-        if (!proj.dead && proj.y >= groundY) {
+        if (!proj.dead && proj.y >= this.terrainHeightAt(proj.x)) {
           proj.dead = true;
         }
       }
@@ -788,6 +834,30 @@ class Game {
     winnerScreen.classList.remove("hidden");
   }
 
+  drawTree(ctx, tree) {
+    const groundYAt = this.terrainHeightAt(tree.x);
+    const s = tree.scale;
+    const trunkH = 30 * s;
+    const trunkW = 7 * s;
+
+    ctx.save();
+    ctx.translate(tree.x, groundYAt);
+
+    ctx.fillStyle = "#2b1d14";
+    ctx.fillRect(-trunkW / 2, -trunkH, trunkW, trunkH);
+
+    const green = `hsl(${125 + tree.tone * 20}, 32%, ${22 + tree.tone * 8}%)`;
+    ctx.fillStyle = green;
+    for (let i = 0; i < 3; i++) {
+      const r = (30 - i * 6) * s;
+      const yy = -trunkH - i * 16 * s;
+      ctx.beginPath();
+      ctx.arc(0, yy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   draw() {
     ctx.clearRect(0, 0, width, height);
 
@@ -812,13 +882,39 @@ class Game {
     ctx.scale(cam.zoom, cam.zoom);
     ctx.translate(-cam.x, -cam.y);
 
-    // Boden (deckt die gesamte Arena ab, damit Kameraschwenks nie den
-    // Rand zeigen)
+    // Boden folgt jetzt dem Hügelprofil statt flach zu sein (deckt
+    // die gesamte Arena ab, damit Kameraschwenks nie den Rand zeigen)
     const groundPad = WORLD_MARGIN;
+    const terrainStep = 50;
+    const groundBottom = groundY + 400;
+
+    ctx.beginPath();
+    ctx.moveTo(-groundPad, groundBottom);
+    for (let tx = -groundPad; tx <= WORLD_WIDTH + groundPad; tx += terrainStep) {
+      ctx.lineTo(tx, this.terrainHeightAt(tx));
+    }
+    ctx.lineTo(WORLD_WIDTH + groundPad, this.terrainHeightAt(WORLD_WIDTH + groundPad));
+    ctx.lineTo(WORLD_WIDTH + groundPad, groundBottom);
+    ctx.closePath();
     ctx.fillStyle = "#3e2723";
-    ctx.fillRect(-groundPad, groundY + 40, WORLD_WIDTH + groundPad * 2, height);
-    ctx.fillStyle = "#5d4037";
-    ctx.fillRect(-groundPad, groundY + 40, WORLD_WIDTH + groundPad * 2, 8);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(-groundPad, this.terrainHeightAt(-groundPad));
+    for (let tx = -groundPad; tx <= WORLD_WIDTH + groundPad; tx += terrainStep) {
+      ctx.lineTo(tx, this.terrainHeightAt(tx));
+    }
+    ctx.strokeStyle = "#5d4037";
+    ctx.lineWidth = 8;
+    ctx.lineJoin = "round";
+    ctx.stroke();
+    ctx.strokeStyle = "#6d8c4a";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Bäume im Hintergrund, auf dem Gelände stehend - rein
+    // dekorativ, macht die Arena lebendiger.
+    this.trees.forEach((tree) => this.drawTree(ctx, tree));
 
     this.players.forEach((p) => p.draw(ctx));
     this.projectiles.forEach((p) => p.draw(ctx));
