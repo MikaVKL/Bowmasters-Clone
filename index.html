@@ -431,25 +431,32 @@ class Game {
     for (const proj of this.projectiles) {
       if (proj.dead) continue;
 
+      let hit = false;
+
       if (proj.y > height + 100 || proj.x < -100 || proj.x > width + 100) {
         proj.dead = true;
-        continue;
-      }
+      } else {
+        for (const target of this.players) {
+          if (target.id === proj.ownerId || !target.isAlive) continue;
+          const dx = proj.x - target.x;
+          const dy = proj.y - (target.y - 40);
+          if (Math.hypot(dx, dy) < 34) {
+            target.takeDamage(proj.damage);
+            proj.dead = true;
+            hit = true;
+            this.onHit(target);
+            break;
+          }
+        }
 
-      for (const target of this.players) {
-        if (target.id === proj.ownerId || !target.isAlive) continue;
-        const dx = proj.x - target.x;
-        const dy = proj.y - (target.y - 40);
-        if (Math.hypot(dx, dy) < 34) {
-          target.takeDamage(proj.damage);
+        if (!proj.dead && proj.y >= groundY) {
           proj.dead = true;
-          this.onHit(target);
-          break;
         }
       }
 
-      if (!proj.dead && proj.y >= groundY) {
-        proj.dead = true;
+      if (proj.dead && !hit) {
+        // Pfeil hat nicht getroffen (Boden/Rand) - Zug geht trotzdem weiter
+        this.nextTurn();
       }
     }
 
