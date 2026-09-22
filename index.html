@@ -556,22 +556,47 @@ class Game {
       for (let i = 0; i < count; i++) {
         hills.push({
           centerX: gapStart + Math.random() * (gapEnd - gapStart),
-          width: 220 + Math.random() * 280,
-          height: 90 + Math.random() * 180,
+          // breiter + flacherer Exponent (in terrainHeightAt) = deutlich
+          // sanftere Hänge statt steiler Buckel.
+          width: 420 + Math.random() * 420,
+          height: 70 + Math.random() * 130,
         });
       }
     }
+
+    // Feine, zufällige Unebenheit obendrauf (zwei überlagerte
+    // Sinuswellen), damit das Gelände nicht wie eine perfekte
+    // Glockenkurve wirkt, sondern etwas organischer.
+    this.terrainNoise = {
+      freq1: 0.0022 + Math.random() * 0.0018,
+      phase1: Math.random() * Math.PI * 2,
+      amp1: 6 + Math.random() * 6,
+      freq2: 0.006 + Math.random() * 0.004,
+      phase2: Math.random() * Math.PI * 2,
+      amp2: 3 + Math.random() * 3,
+    };
+
     return hills;
   }
 
   // Höhe der Geländeoberfläche (Welt-Y) an einer bestimmten Welt-X-
-  // Position - Summe sanfter Glockenkurven-Hügel über der Basislinie.
+  // Position - Summe sanfter Hügel über der Basislinie, plus etwas
+  // leichtes Rauschen für eine organischere, weniger "computergenaue"
+  // Silhouette.
   terrainHeightAt(x) {
     let bump = 0;
     for (const h of this.hills) {
       const t = (x - h.centerX) / h.width;
-      bump += h.height * Math.exp(-t * t * 4);
+      bump += h.height * Math.exp(-t * t * 1.8);
     }
+
+    const n = this.terrainNoise;
+    if (n) {
+      bump +=
+        Math.sin(x * n.freq1 + n.phase1) * n.amp1 +
+        Math.sin(x * n.freq2 + n.phase2) * n.amp2;
+    }
+
     return groundY - bump;
   }
 
