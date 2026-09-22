@@ -366,16 +366,18 @@ const winnerScreen = document.getElementById("winner-screen");
 const winnerText = document.getElementById("winner-text");
 const restartBtn = document.getElementById("restart-btn");
 
-const MAX_DRAG = 170;
-const POWER_TO_SPEED = 9;
+const MAX_DRAG = 200;
+const POWER_TO_SPEED = 10;
 
 // Die Arena ist viel breiter als der Bildschirm: die Spieler stehen an
 // zufälligen, unterschiedlich weit auseinander liegenden Positionen,
 // damit man nicht jedes Mal denselben Winkel/dieselbe Kraft schießen
 // kann. groundY bleibt bildschirmbezogen (Boden ist immer unten).
-const WORLD_MARGIN = 400;
-const MIN_DISTANCE = 900;
-const MAX_DISTANCE = 2200;
+// Größerer Abstand = schwerer zu treffen, man braucht mehr Kraft und
+// einen präziseren Winkel.
+const WORLD_MARGIN = 500;
+const MIN_DISTANCE = 1800;
+const MAX_DISTANCE = 3400;
 const WORLD_WIDTH = MAX_DISTANCE + WORLD_MARGIN * 2;
 
 // Zoomstufe während des Pfeilflugs - deutlich herausgezoomt, um das
