@@ -300,7 +300,7 @@ class Player {
 // ---------------------------------------------------------------------
 // Projektil
 // ---------------------------------------------------------------------
-const GRAVITY = 900; // px/s^2
+const GRAVITY = 1050; // px/s^2 - hoch genug für einen deutlich sichtbaren Bogen
 
 class Projectile {
   constructor({ x, y, vx, vy, damage, color, ownerId }) {
@@ -366,8 +366,15 @@ const winnerScreen = document.getElementById("winner-screen");
 const winnerText = document.getElementById("winner-text");
 const restartBtn = document.getElementById("restart-btn");
 
-const MAX_DRAG = 200;
+const MAX_DRAG = 210;
 const POWER_TO_SPEED = 10;
+
+// Ein Schuss darf nie flach/waagerecht abgefeuert werden - es muss
+// immer ein Mindestbogen dabei sein. In Kombination mit der Schwerkraft
+// reicht die Kraft am oberen Ende der Distanz nur noch für einen
+// engen Winkelbereich um 45°, man muss also wirklich höher zielen,
+// nicht einfach nur "in Richtung Gegner" ziehen.
+const MIN_LAUNCH_ANGLE = (22 * Math.PI) / 180;
 
 // Die Arena ist viel breiter als der Bildschirm: die Spieler stehen an
 // zufälligen, unterschiedlich weit auseinander liegenden Positionen,
@@ -379,6 +386,22 @@ const WORLD_MARGIN = 500;
 const MIN_DISTANCE = 1800;
 const MAX_DISTANCE = 3400;
 const WORLD_WIDTH = MAX_DISTANCE + WORLD_MARGIN * 2;
+
+// Erzwingt den Mindest-Abschusswinkel: ein zu flach oder gar nach
+// unten gezogener Schuss wird auf die nächstgelegene gültige
+// Bogen-Richtung "hochgezogen" (rechts- oder linksseitig, je
+// nachdem, in welche Richtung gezogen wurde).
+function clampLaunchAngle(angle) {
+  const upperFlatRight = 0;
+  const upperFlatLeft = -Math.PI;
+  if (angle <= upperFlatRight && angle > upperFlatRight - MIN_LAUNCH_ANGLE) {
+    return upperFlatRight - MIN_LAUNCH_ANGLE;
+  }
+  if (angle >= upperFlatLeft && angle < upperFlatLeft + MIN_LAUNCH_ANGLE) {
+    return upperFlatLeft + MIN_LAUNCH_ANGLE;
+  }
+  return angle;
+}
 
 // Zoomstufe während des Pfeilflugs - deutlich herausgezoomt, um das
 // Gelände zu überblicken (< 1 = mehr Weltraum sichtbar als 1:1).
@@ -548,26 +571,31 @@ class Game {
     this.dragCurrent = pos;
   }
 
+  // Berechnet aus dem aktuellen Drag Distanz + Winkel - inklusive
+  // Mindestbogen. Wird von der Zughilfe-Vorschau, der Ziellinie und
+  // dem tatsächlichen Schuss gemeinsam genutzt, damit alle drei
+  // exakt übereinstimmen.
+  getDragShot() {
+    const dx = this.dragStart.x - this.dragCurrent.x;
+    const dy = this.dragStart.y - this.dragCurrent.y;
+    const dist = Math.min(Math.hypot(dx, dy), MAX_DRAG);
+    const angle = clampLaunchAngle(Math.atan2(dy, dx));
+    return { dist, angle };
+  }
+
   updateDrag(pos) {
     if (!this.isDragging) return;
     this.dragCurrent = pos;
-
-    const dx = this.dragStart.x - pos.x;
-    const dy = this.dragStart.y - pos.y;
-    const angle = Math.atan2(dy, dx);
-    this.activePlayer.aimAngle = angle;
+    this.activePlayer.aimAngle = this.getDragShot().angle;
   }
 
   endDrag() {
     if (!this.isDragging) return;
     this.isDragging = false;
 
-    const dx = this.dragStart.x - this.dragCurrent.x;
-    const dy = this.dragStart.y - this.dragCurrent.y;
-    const dist = Math.min(Math.hypot(dx, dy), MAX_DRAG);
+    const { dist, angle } = this.getDragShot();
     if (dist < 12) return; // zu klein, als Tap ignorieren
 
-    const angle = Math.atan2(dy, dx);
     const power = dist * POWER_TO_SPEED;
     const ability = this.activePlayer.character.ability;
 
@@ -725,10 +753,7 @@ class Game {
       const shooter = this.activePlayer;
       const shooterScreenX = width / 2 + (shooter.x - cam.x) * cam.zoom;
       const shooterScreenY = height / 2 + (shooter.y - 35 - cam.y) * cam.zoom;
-      const dx = this.dragStart.x - this.dragCurrent.x;
-      const dy = this.dragStart.y - this.dragCurrent.y;
-      const dist = Math.min(Math.hypot(dx, dy), MAX_DRAG);
-      const angle = Math.atan2(dy, dx);
+      const { dist, angle } = this.getDragShot();
 
       ctx.save();
       ctx.strokeStyle = "#ffd54f";
