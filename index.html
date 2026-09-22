@@ -177,6 +177,87 @@
     opacity: 0;
   }
 
+  #move-controls {
+    position: absolute;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    pointer-events: all;
+    transition: opacity 0.25s ease;
+  }
+
+  #move-controls.hidden {
+    display: none;
+  }
+
+  .move-btn {
+    width: 56px;
+    height: 56px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(15, 15, 25, 0.6);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    color: #fff;
+    font-size: 22px;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .move-btn:active,
+  .move-btn.pressed {
+    background: rgba(255, 213, 79, 0.35);
+    border-color: rgba(255, 213, 79, 0.6);
+    transform: scale(0.94);
+  }
+
+  #move-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    min-width: 150px;
+    color: #fff;
+    font-size: 12px;
+  }
+
+  #move-timerbar {
+    width: 130px;
+    height: 8px;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  #move-timerbar-fill {
+    height: 100%;
+    width: 100%;
+    background: linear-gradient(90deg, #64b5f6, #4fc3f7);
+    transition: width 0.1s linear;
+  }
+
+  #move-skip {
+    border: none;
+    border-radius: 6px;
+    padding: 3px 10px;
+    margin-top: 2px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #e0e0e0;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  #move-skip:hover {
+    background: rgba(255, 255, 255, 0.22);
+  }
+
   #winner-screen {
     position: absolute;
     inset: 0;
@@ -254,6 +335,15 @@
     <div id="turn-indicator" class="panel">Spieler 1 ist am Zug</div>
     <div id="distance-indicator" class="panel"><span class="arrow">→</span><span class="value">0m</span></div>
     <div id="aim-hint" class="panel">Zum Zielen ziehen &amp; loslassen</div>
+    <div id="move-controls" class="hidden">
+      <button id="move-left" class="move-btn">◀</button>
+      <div id="move-status" class="panel">
+        <span id="move-label">Bewegen möglich</span>
+        <div id="move-timerbar"><div id="move-timerbar-fill"></div></div>
+        <button id="move-skip">Fertig</button>
+      </div>
+      <button id="move-right" class="move-btn">▶</button>
+    </div>
     <div id="winner-screen" class="hidden">
       <div id="winner-trophy">🏆</div>
       <div id="winner-text"></div>
@@ -465,12 +555,27 @@ const hudP2 = document.getElementById("hud-p2");
 const turnIndicator = document.getElementById("turn-indicator");
 const distanceIndicator = document.getElementById("distance-indicator");
 const aimHint = document.getElementById("aim-hint");
+const moveControls = document.getElementById("move-controls");
+const moveLeftBtn = document.getElementById("move-left");
+const moveRightBtn = document.getElementById("move-right");
+const moveSkipBtn = document.getElementById("move-skip");
+const moveLabel = document.getElementById("move-label");
+const moveTimerFill = document.getElementById("move-timerbar-fill");
 const winnerScreen = document.getElementById("winner-screen");
 const winnerText = document.getElementById("winner-text");
 const restartBtn = document.getElementById("restart-btn");
 
 const MAX_DRAG = 210;
 const POWER_TO_SPEED = 10;
+
+// Bewegungsphase zu Zugbeginn (wie bei Tank Stars): sobald man einen
+// der Bewegen-Buttons berührt, laufen 5 Sekunden, in denen man sich
+// bis zu ~10m in jede Richtung (=20m Gesamtbereich) neu positionieren
+// kann. Rührt man die Buttons nicht an, kann man sofort zielen.
+const MOVE_WINDOW_SECONDS = 5;
+const MOVE_RANGE = 100; // Welteinheiten je Richtung (~10m, 10 Einheiten = 1m)
+const MOVE_SPEED = 90; // Welteinheiten/Sekunde
+const MOVE_MIN_GAP = 300; // Mindestabstand zum Gegner beim Umherlaufen
 
 // Die Arena ist viel breiter als der Bildschirm: die Spieler stehen an
 // zufälligen, unterschiedlich weit auseinander liegenden Positionen,
@@ -518,10 +623,12 @@ class Game {
     this.dragCurrent = null;
     this.gameOver = false;
     this.shake = 0;
+    this.hasFiredOnce = false;
     winnerScreen.classList.add("hidden");
     aimHint.classList.remove("hidden");
     this.updateHud();
     this.randomizeArena();
+    this.startMovementWindow();
   }
 
   // Neue Runde: zufälliger Abstand zwischen den Spielern, an
@@ -727,9 +834,81 @@ class Game {
 
   startDrag(pos) {
     if (this.gameOver || this.projectiles.length > 0) return;
+    if (this.movement && this.movement.active) {
+      if (this.movement.started) return; // Uhr läuft bereits - erst fertig bewegen
+      this.endMovementWindow(); // ungenutzt - direktes Zielen beendet das Bewegungsfenster
+    }
     this.isDragging = true;
     this.dragStart = pos;
     this.dragCurrent = pos;
+  }
+
+  // ---------------------------------------------------------------
+  // Bewegungsphase (wie bei Tank Stars): zu Zugbeginn stehen die
+  // Bewegen-Buttons bereit, ohne dass schon eine Uhr läuft. Erst die
+  // erste Berührung eines Buttons startet die 5-Sekunden-Uhr, während
+  // der man sich innerhalb von ~20m neu positionieren kann. Rührt man
+  // die Buttons gar nicht an, kann sofort normal gezielt werden.
+  // ---------------------------------------------------------------
+  startMovementWindow() {
+    const shooter = this.activePlayer;
+    this.movement = {
+      active: true,
+      started: false,
+      timeLeft: MOVE_WINDOW_SECONDS,
+      dir: 0,
+      startX: shooter.x,
+    };
+    moveControls.classList.remove("hidden");
+    aimHint.classList.add("hidden");
+    moveLabel.textContent = "Bewegen möglich";
+    moveTimerFill.style.width = "100%";
+  }
+
+  endMovementWindow() {
+    if (this.movement) this.movement.active = false;
+    moveControls.classList.add("hidden");
+    if (!this.hasFiredOnce) aimHint.classList.remove("hidden");
+  }
+
+  setMoveDirection(dir) {
+    if (!this.movement || !this.movement.active) return;
+    this.movement.dir = dir;
+    if (dir !== 0 && !this.movement.started) {
+      this.movement.started = true;
+      moveLabel.textContent = "Bewegen...";
+    }
+  }
+
+  updateMovement(dt) {
+    const mv = this.movement;
+    if (!mv || !mv.active) return;
+
+    if (mv.started) {
+      mv.timeLeft = Math.max(0, mv.timeLeft - dt);
+      moveTimerFill.style.width = `${(mv.timeLeft / MOVE_WINDOW_SECONDS) * 100}%`;
+      if (mv.timeLeft <= 0) {
+        this.endMovementWindow();
+        return;
+      }
+    }
+
+    if (mv.dir !== 0) {
+      const shooter = this.activePlayer;
+      const opponent = this.players.find((p) => p !== shooter);
+
+      let minX = Math.max(mv.startX - MOVE_RANGE, WORLD_MARGIN);
+      let maxX = Math.min(mv.startX + MOVE_RANGE, WORLD_WIDTH - WORLD_MARGIN);
+      if (opponent.x > shooter.x) {
+        maxX = Math.min(maxX, opponent.x - MOVE_MIN_GAP);
+      } else {
+        minX = Math.max(minX, opponent.x + MOVE_MIN_GAP);
+      }
+
+      shooter.x = Math.min(Math.max(shooter.x + mv.dir * MOVE_SPEED * dt, minX), maxX);
+      shooter.y = this.terrainHeightAt(shooter.x);
+      this.updateDistanceUI();
+    }
   }
 
   // Berechnet aus dem aktuellen Drag Distanz + Winkel - vollkommen
@@ -757,6 +936,7 @@ class Game {
     const { dist, angle } = this.getDragShot();
     if (dist < 12) return; // zu klein, als Tap ignorieren
 
+    this.hasFiredOnce = true;
     aimHint.classList.add("hidden");
 
     const power = dist * POWER_TO_SPEED;
@@ -779,6 +959,7 @@ class Game {
   update(dt) {
     this.projectiles.forEach((p) => p.update(dt));
     this.updateCamera(dt);
+    this.updateMovement(dt);
 
     this.hitTexts.forEach((t) => {
       t.y -= 40 * dt;
@@ -850,10 +1031,12 @@ class Game {
   nextTurn() {
     this.turn = (this.turn + 1) % 2;
     this.updateHud();
+    this.startMovementWindow();
   }
 
   endGame(winner) {
     this.gameOver = true;
+    this.endMovementWindow();
     const label = winner === this.players[0] ? "Spieler 1" : "Spieler 2";
     winnerText.textContent = `${label} gewinnt!`;
     winnerScreen.classList.remove("hidden");
@@ -1049,6 +1232,32 @@ function attachInput() {
   window.addEventListener("touchend", () => game.endDrag());
 
   restartBtn.addEventListener("click", () => game.reset());
+
+  // Bewegen-Buttons: halten = laufen, loslassen = stehen bleiben.
+  // Die 5-Sekunden-Uhr startet erst bei der ersten Berührung.
+  const bindMoveButton = (btn, dir) => {
+    const start = (e) => {
+      e.preventDefault();
+      btn.classList.add("pressed");
+      game.setMoveDirection(dir);
+    };
+    const stop = () => {
+      btn.classList.remove("pressed");
+      if (game.movement && game.movement.dir === dir) {
+        game.setMoveDirection(0);
+      }
+    };
+    btn.addEventListener("mousedown", start);
+    btn.addEventListener("touchstart", start, { passive: false });
+    btn.addEventListener("mouseup", stop);
+    btn.addEventListener("mouseleave", stop);
+    btn.addEventListener("touchend", stop);
+    btn.addEventListener("touchcancel", stop);
+  };
+  bindMoveButton(moveLeftBtn, -1);
+  bindMoveButton(moveRightBtn, 1);
+
+  moveSkipBtn.addEventListener("click", () => game.endMovementWindow());
 }
 
 resize();
