@@ -179,12 +179,13 @@
 
   #move-controls {
     position: absolute;
-    bottom: 30px;
+    bottom: 26px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     pointer-events: all;
     transition: opacity 0.25s ease;
   }
@@ -193,36 +194,12 @@
     display: none;
   }
 
-  .move-btn {
-    width: 56px;
-    height: 56px;
-    border: none;
-    border-radius: 50%;
-    background: rgba(15, 15, 25, 0.6);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
-    color: #fff;
-    font-size: 22px;
-    cursor: pointer;
-    touch-action: none;
-    user-select: none;
-  }
-
-  .move-btn:active,
-  .move-btn.pressed {
-    background: rgba(255, 213, 79, 0.35);
-    border-color: rgba(255, 213, 79, 0.6);
-    transform: scale(0.94);
-  }
-
   #move-status {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 6px;
-    padding: 8px 14px;
+    padding: 7px 14px;
     min-width: 150px;
     color: #fff;
     font-size: 12px;
@@ -256,6 +233,41 @@
 
   #move-skip:hover {
     background: rgba(255, 255, 255, 0.22);
+  }
+
+  /* Joystick: Basis-Ring + Knopf, den man horizontal zieht. Die
+     Auslenkung bestimmt sowohl Richtung als auch Lauftempo. */
+  #joystick-base {
+    position: relative;
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: rgba(15, 15, 25, 0.55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    touch-action: none;
+    cursor: grab;
+  }
+
+  #joystick-knob {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    margin: -22px 0 0 -22px;
+    border-radius: 50%;
+    background: rgba(255, 213, 79, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+    pointer-events: none;
+    transition: background 0.15s ease;
+  }
+
+  #joystick-base.active #joystick-knob {
+    background: rgba(255, 213, 79, 1);
   }
 
   #winner-screen {
@@ -336,13 +348,14 @@
     <div id="distance-indicator" class="panel"><span class="arrow">→</span><span class="value">0m</span></div>
     <div id="aim-hint" class="panel">Zum Zielen ziehen &amp; loslassen</div>
     <div id="move-controls" class="hidden">
-      <button id="move-left" class="move-btn">◀</button>
       <div id="move-status" class="panel">
         <span id="move-label">Bewegen möglich</span>
         <div id="move-timerbar"><div id="move-timerbar-fill"></div></div>
         <button id="move-skip">Fertig</button>
       </div>
-      <button id="move-right" class="move-btn">▶</button>
+      <div id="joystick-base">
+        <div id="joystick-knob"></div>
+      </div>
     </div>
     <div id="winner-screen" class="hidden">
       <div id="winner-trophy">🏆</div>
@@ -556,8 +569,8 @@ const turnIndicator = document.getElementById("turn-indicator");
 const distanceIndicator = document.getElementById("distance-indicator");
 const aimHint = document.getElementById("aim-hint");
 const moveControls = document.getElementById("move-controls");
-const moveLeftBtn = document.getElementById("move-left");
-const moveRightBtn = document.getElementById("move-right");
+const joystickBase = document.getElementById("joystick-base");
+const joystickKnob = document.getElementById("joystick-knob");
 const moveSkipBtn = document.getElementById("move-skip");
 const moveLabel = document.getElementById("move-label");
 const moveTimerFill = document.getElementById("move-timerbar-fill");
@@ -863,18 +876,27 @@ class Game {
     aimHint.classList.add("hidden");
     moveLabel.textContent = "Bewegen möglich";
     moveTimerFill.style.width = "100%";
+    joystickKnob.style.transform = "translate(0px, 0px)";
+    joystickBase.classList.remove("active");
   }
 
   endMovementWindow() {
     if (this.movement) this.movement.active = false;
     moveControls.classList.add("hidden");
+    joystickKnob.style.transform = "translate(0px, 0px)";
+    joystickBase.classList.remove("active");
     if (!this.hasFiredOnce) aimHint.classList.remove("hidden");
   }
 
+  // dir ist analog im Bereich -1..1 (Joystick-Auslenkung), bestimmt
+  // Richtung UND Lauftempo zugleich. Eine kleine Totzone verhindert,
+  // dass winzige Zitter-Bewegungen versehentlich die Uhr starten.
   setMoveDirection(dir) {
     if (!this.movement || !this.movement.active) return;
-    this.movement.dir = dir;
-    if (dir !== 0 && !this.movement.started) {
+    const DEADZONE = 0.15;
+    const value = Math.abs(dir) < DEADZONE ? 0 : dir;
+    this.movement.dir = value;
+    if (value !== 0 && !this.movement.started) {
       this.movement.started = true;
       moveLabel.textContent = "Bewegen...";
     }
@@ -1233,29 +1255,57 @@ function attachInput() {
 
   restartBtn.addEventListener("click", () => game.reset());
 
-  // Bewegen-Buttons: halten = laufen, loslassen = stehen bleiben.
-  // Die 5-Sekunden-Uhr startet erst bei der ersten Berührung.
-  const bindMoveButton = (btn, dir) => {
-    const start = (e) => {
-      e.preventDefault();
-      btn.classList.add("pressed");
-      game.setMoveDirection(dir);
-    };
-    const stop = () => {
-      btn.classList.remove("pressed");
-      if (game.movement && game.movement.dir === dir) {
-        game.setMoveDirection(0);
-      }
-    };
-    btn.addEventListener("mousedown", start);
-    btn.addEventListener("touchstart", start, { passive: false });
-    btn.addEventListener("mouseup", stop);
-    btn.addEventListener("mouseleave", stop);
-    btn.addEventListener("touchend", stop);
-    btn.addEventListener("touchcancel", stop);
+  // Joystick: ziehen setzt Richtung UND Tempo analog (Auslenkung vom
+  // Mittelpunkt, horizontal geklemmt auf den Basis-Radius). Die
+  // 5-Sekunden-Uhr startet erst bei der ersten echten Auslenkung.
+  const JOYSTICK_RADIUS = 34;
+  let joystickPointerId = null;
+
+  const setKnobOffset = (dx, dy) => {
+    joystickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
   };
-  bindMoveButton(moveLeftBtn, -1);
-  bindMoveButton(moveRightBtn, 1);
+
+  const handleJoystickPointer = (e) => {
+    const rect = joystickBase.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    let dx = e.clientX - cx;
+    let dy = e.clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > JOYSTICK_RADIUS) {
+      dx = (dx / dist) * JOYSTICK_RADIUS;
+      dy = (dy / dist) * JOYSTICK_RADIUS;
+    }
+    setKnobOffset(dx, dy);
+    game.setMoveDirection(dx / JOYSTICK_RADIUS);
+  };
+
+  const releaseJoystick = () => {
+    joystickPointerId = null;
+    joystickBase.classList.remove("active");
+    setKnobOffset(0, 0);
+    game.setMoveDirection(0);
+  };
+
+  joystickBase.addEventListener("pointerdown", (e) => {
+    if (!game.movement || !game.movement.active) return;
+    joystickPointerId = e.pointerId;
+    joystickBase.setPointerCapture(e.pointerId);
+    joystickBase.classList.add("active");
+    handleJoystickPointer(e);
+  });
+  joystickBase.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== joystickPointerId) return;
+    handleJoystickPointer(e);
+  });
+  joystickBase.addEventListener("pointerup", (e) => {
+    if (e.pointerId !== joystickPointerId) return;
+    releaseJoystick();
+  });
+  joystickBase.addEventListener("pointercancel", (e) => {
+    if (e.pointerId !== joystickPointerId) return;
+    releaseJoystick();
+  });
 
   moveSkipBtn.addEventListener("click", () => game.endMovementWindow());
 }
