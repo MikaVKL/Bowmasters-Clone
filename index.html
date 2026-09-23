@@ -769,13 +769,18 @@ class Game {
   // Richtungsangabe, statt den Gegner direkt zu zeigen. Berechnet die
   // tatsächliche, aktuelle Entfernung aus den Live-Positionen (nicht
   // den ursprünglich ausgewürfelten Arena-Wert), damit die Anzeige
-  // nach dem Umherlaufen wirklich kleiner wird.
+  // nach dem Umherlaufen wirklich kleiner wird. Fliegt gerade ein
+  // Pfeil, zählt die Anzeige stattdessen die noch verbleibende
+  // Reststrecke bis zum Ziel herunter - sie schrumpft dann sichtbar
+  // im Takt des Pfeilflugs, statt konstant zu bleiben.
   updateDistanceUI() {
     if (!this.players.length) return;
     const shooter = this.activePlayer;
     const opponent = this.players.find((p) => p !== shooter);
-    const liveDistance = Math.abs(opponent.x - shooter.x);
-    const opponentIsRight = opponent.x > shooter.x;
+    const activeProjectile = this.projectiles[0];
+    const referenceX = activeProjectile ? activeProjectile.x : shooter.x;
+    const liveDistance = Math.abs(opponent.x - referenceX);
+    const opponentIsRight = opponent.x > referenceX;
 
     distanceIndicator.classList.toggle("side-right", opponentIsRight);
     distanceIndicator.classList.toggle("side-left", !opponentIsRight);
@@ -991,6 +996,7 @@ class Game {
     this.projectiles.forEach((p) => p.update(dt));
     this.updateCamera(dt);
     this.updateMovement(dt);
+    if (this.projectiles.length > 0) this.updateDistanceUI();
 
     this.hitTexts.forEach((t) => {
       t.y -= 40 * dt;
