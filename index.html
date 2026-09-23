@@ -163,7 +163,7 @@
 
   #aim-hint {
     position: absolute;
-    bottom: 216px;
+    bottom: 36px;
     left: 50%;
     transform: translateX(-50%);
     padding: 8px 18px;
@@ -177,11 +177,12 @@
     opacity: 0;
   }
 
+  /* In der linken unteren Ecke, damit der Daumen den Charakter/die
+     Zielfläche in der Bildschirmmitte nicht mehr überdeckt. */
   #move-controls {
     position: absolute;
     bottom: 26px;
-    left: 50%;
-    transform: translateX(-50%);
+    left: 20px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -316,6 +317,45 @@
   #restart-btn:active {
     transform: translateY(1px) scale(0.98);
     box-shadow: 0 2px 6px rgba(255, 213, 79, 0.3);
+  }
+
+  /* Auf schmalen Bildschirmen (Handy) waren HUD und Zuganzeige groß
+     genug, um sich gegenseitig zu überlappen - hier verkleinert und
+     die Zuganzeige unter die HUDs verschoben, damit nichts kollidiert. */
+  @media (max-width: 700px) {
+    .hud {
+      width: 130px;
+      padding: 7px 10px;
+    }
+
+    .name {
+      font-size: 11px;
+      margin-bottom: 3px;
+    }
+
+    .healthbar {
+      height: 11px;
+    }
+
+    #turn-indicator {
+      top: 76px;
+      font-size: 13px;
+      padding: 6px 16px;
+    }
+
+    #distance-indicator {
+      font-size: 12px;
+      padding: 8px 6px;
+    }
+
+    /* Unten links sitzt jetzt der Joystick - der Hinweistext würde
+       dort hineinragen, deshalb auf schmalen Screens stattdessen
+       oben unter der Zuganzeige einblenden. */
+    #aim-hint {
+      bottom: auto;
+      top: 118px;
+      font-size: 12px;
+    }
   }
 </style>
 </head>
@@ -726,17 +766,21 @@ class Game {
 
   // Zeigt die Distanz an einem Bildschirmrand an - auf der Seite, zu
   // der der Gegner tatsächlich steht - mit einem Pfeil als
-  // Richtungsangabe, statt den Gegner direkt zu zeigen.
+  // Richtungsangabe, statt den Gegner direkt zu zeigen. Berechnet die
+  // tatsächliche, aktuelle Entfernung aus den Live-Positionen (nicht
+  // den ursprünglich ausgewürfelten Arena-Wert), damit die Anzeige
+  // nach dem Umherlaufen wirklich kleiner wird.
   updateDistanceUI() {
-    if (this.distance == null || !this.players.length) return;
+    if (!this.players.length) return;
     const shooter = this.activePlayer;
     const opponent = this.players.find((p) => p !== shooter);
+    const liveDistance = Math.abs(opponent.x - shooter.x);
     const opponentIsRight = opponent.x > shooter.x;
 
     distanceIndicator.classList.toggle("side-right", opponentIsRight);
     distanceIndicator.classList.toggle("side-left", !opponentIsRight);
     distanceIndicator.querySelector(".arrow").textContent = opponentIsRight ? "→" : "←";
-    distanceIndicator.querySelector(".value").textContent = `${Math.round(this.distance / 10)}m`;
+    distanceIndicator.querySelector(".value").textContent = `${Math.round(liveDistance / 10)}m`;
   }
 
   // ---------------------------------------------------------------
