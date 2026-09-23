@@ -163,7 +163,7 @@
 
   #aim-hint {
     position: absolute;
-    bottom: 36px;
+    bottom: 216px;
     left: 50%;
     transform: translateX(-50%);
     padding: 8px 18px;
@@ -205,7 +205,7 @@
     font-size: 12px;
   }
 
-  #move-timerbar {
+  #move-staminabar {
     width: 130px;
     height: 8px;
     background: rgba(0, 0, 0, 0.5);
@@ -213,26 +213,11 @@
     overflow: hidden;
   }
 
-  #move-timerbar-fill {
+  #move-staminabar-fill {
     height: 100%;
     width: 100%;
     background: linear-gradient(90deg, #64b5f6, #4fc3f7);
-    transition: width 0.1s linear;
-  }
-
-  #move-skip {
-    border: none;
-    border-radius: 6px;
-    padding: 3px 10px;
-    margin-top: 2px;
-    background: rgba(255, 255, 255, 0.12);
-    color: #e0e0e0;
-    font-size: 11px;
-    cursor: pointer;
-  }
-
-  #move-skip:hover {
-    background: rgba(255, 255, 255, 0.22);
+    transition: width 0.08s linear;
   }
 
   /* Joystick: Basis-Ring + Knopf, den man horizontal zieht. Die
@@ -349,9 +334,8 @@
     <div id="aim-hint" class="panel">Zum Zielen ziehen &amp; loslassen</div>
     <div id="move-controls" class="hidden">
       <div id="move-status" class="panel">
-        <span id="move-label">Bewegen möglich</span>
-        <div id="move-timerbar"><div id="move-timerbar-fill"></div></div>
-        <button id="move-skip">Fertig</button>
+        <span id="move-label">Ausdauer</span>
+        <div id="move-staminabar"><div id="move-staminabar-fill"></div></div>
       </div>
       <div id="joystick-base">
         <div id="joystick-knob"></div>
@@ -571,9 +555,7 @@ const aimHint = document.getElementById("aim-hint");
 const moveControls = document.getElementById("move-controls");
 const joystickBase = document.getElementById("joystick-base");
 const joystickKnob = document.getElementById("joystick-knob");
-const moveSkipBtn = document.getElementById("move-skip");
-const moveLabel = document.getElementById("move-label");
-const moveTimerFill = document.getElementById("move-timerbar-fill");
+const staminaFill = document.getElementById("move-staminabar-fill");
 const winnerScreen = document.getElementById("winner-screen");
 const winnerText = document.getElementById("winner-text");
 const restartBtn = document.getElementById("restart-btn");
@@ -581,12 +563,11 @@ const restartBtn = document.getElementById("restart-btn");
 const MAX_DRAG = 210;
 const POWER_TO_SPEED = 10;
 
-// Bewegungsphase zu Zugbeginn (wie bei Tank Stars): sobald man einen
-// der Bewegen-Buttons berührt, laufen 5 Sekunden, in denen man sich
-// bis zu ~10m in jede Richtung (=20m Gesamtbereich) neu positionieren
-// kann. Rührt man die Buttons nicht an, kann man sofort zielen.
-const MOVE_WINDOW_SECONDS = 5;
-const MOVE_RANGE = 100; // Welteinheiten je Richtung (~10m, 10 Einheiten = 1m)
+// Bewegung: der Joystick ist die ganze Runde über nutzbar, blockiert
+// nie das Zielen/Schießen. Eine Ausdauer-Leiste (kein Timer) begrenzt
+// die Gesamtstrecke pro Zug auf ca. 20m - sie läuft nur beim
+// tatsächlichen Laufen leer, dann bleibt man einfach stehen.
+const STAMINA_RANGE = 200; // Welteinheiten Laufbudget pro Zug (~20m, 10 Einheiten = 1m)
 const MOVE_SPEED = 90; // Welteinheiten/Sekunde
 const MOVE_MIN_GAP = 300; // Mindestabstand zum Gegner beim Umherlaufen
 
@@ -641,7 +622,7 @@ class Game {
     aimHint.classList.remove("hidden");
     this.updateHud();
     this.randomizeArena();
-    this.startMovementWindow();
+    this.showMovementControls();
   }
 
   // Neue Runde: zufälliger Abstand zwischen den Spielern, an
@@ -847,90 +828,73 @@ class Game {
 
   startDrag(pos) {
     if (this.gameOver || this.projectiles.length > 0) return;
-    if (this.movement && this.movement.active) {
-      if (this.movement.started) return; // Uhr läuft bereits - erst fertig bewegen
-      this.endMovementWindow(); // ungenutzt - direktes Zielen beendet das Bewegungsfenster
-    }
     this.isDragging = true;
     this.dragStart = pos;
     this.dragCurrent = pos;
   }
 
   // ---------------------------------------------------------------
-  // Bewegungsphase (wie bei Tank Stars): zu Zugbeginn stehen die
-  // Bewegen-Buttons bereit, ohne dass schon eine Uhr läuft. Erst die
-  // erste Berührung eines Buttons startet die 5-Sekunden-Uhr, während
-  // der man sich innerhalb von ~20m neu positionieren kann. Rührt man
-  // die Buttons gar nicht an, kann sofort normal gezielt werden.
+  // Bewegung: der Joystick steht die ganze Runde über bereit und
+  // blockiert nie das Zielen/Schießen - beides geht jederzeit parallel.
+  // Statt einer Zeitsperre gibt es ein Ausdauer-Budget: es sinkt nur,
+  // während man tatsächlich läuft, und begrenzt so die Gesamtstrecke
+  // pro Zug auf ca. 20m. Ist es leer, bleibt man einfach stehen -
+  // keine Blockade, kein Timer, kein Skip nötig.
   // ---------------------------------------------------------------
-  startMovementWindow() {
-    const shooter = this.activePlayer;
-    this.movement = {
-      active: true,
-      started: false,
-      timeLeft: MOVE_WINDOW_SECONDS,
-      dir: 0,
-      startX: shooter.x,
-    };
+  showMovementControls() {
+    this.stamina = STAMINA_RANGE;
+    this.moveDir = 0;
     moveControls.classList.remove("hidden");
-    aimHint.classList.add("hidden");
-    moveLabel.textContent = "Bewegen möglich";
-    moveTimerFill.style.width = "100%";
+    staminaFill.style.width = "100%";
     joystickKnob.style.transform = "translate(0px, 0px)";
     joystickBase.classList.remove("active");
   }
 
-  endMovementWindow() {
-    if (this.movement) this.movement.active = false;
+  hideMovementControls() {
+    this.moveDir = 0;
     moveControls.classList.add("hidden");
     joystickKnob.style.transform = "translate(0px, 0px)";
     joystickBase.classList.remove("active");
-    if (!this.hasFiredOnce) aimHint.classList.remove("hidden");
   }
 
   // dir ist analog im Bereich -1..1 (Joystick-Auslenkung), bestimmt
-  // Richtung UND Lauftempo zugleich. Eine kleine Totzone verhindert,
-  // dass winzige Zitter-Bewegungen versehentlich die Uhr starten.
+  // Richtung UND Lauftempo zugleich. Eine kleine Totzone verhindert
+  // winziges Zittern.
   setMoveDirection(dir) {
-    if (!this.movement || !this.movement.active) return;
-    const DEADZONE = 0.15;
-    const value = Math.abs(dir) < DEADZONE ? 0 : dir;
-    this.movement.dir = value;
-    if (value !== 0 && !this.movement.started) {
-      this.movement.started = true;
-      moveLabel.textContent = "Bewegen...";
+    if (this.gameOver || this.projectiles.length > 0) {
+      this.moveDir = 0;
+      return;
     }
+    const DEADZONE = 0.15;
+    this.moveDir = Math.abs(dir) < DEADZONE ? 0 : dir;
   }
 
   updateMovement(dt) {
-    const mv = this.movement;
-    if (!mv || !mv.active) return;
+    if (!this.moveDir || this.stamina <= 0) return;
 
-    if (mv.started) {
-      mv.timeLeft = Math.max(0, mv.timeLeft - dt);
-      moveTimerFill.style.width = `${(mv.timeLeft / MOVE_WINDOW_SECONDS) * 100}%`;
-      if (mv.timeLeft <= 0) {
-        this.endMovementWindow();
-        return;
-      }
+    const shooter = this.activePlayer;
+    const opponent = this.players.find((p) => p !== shooter);
+
+    let minX = WORLD_MARGIN;
+    let maxX = WORLD_WIDTH - WORLD_MARGIN;
+    if (opponent.x > shooter.x) {
+      maxX = Math.min(maxX, opponent.x - MOVE_MIN_GAP);
+    } else {
+      minX = Math.max(minX, opponent.x + MOVE_MIN_GAP);
     }
 
-    if (mv.dir !== 0) {
-      const shooter = this.activePlayer;
-      const opponent = this.players.find((p) => p !== shooter);
+    const wanted = Math.abs(this.moveDir) * MOVE_SPEED * dt;
+    const spend = Math.min(wanted, this.stamina);
+    const dx = Math.sign(this.moveDir) * spend;
 
-      let minX = Math.max(mv.startX - MOVE_RANGE, WORLD_MARGIN);
-      let maxX = Math.min(mv.startX + MOVE_RANGE, WORLD_WIDTH - WORLD_MARGIN);
-      if (opponent.x > shooter.x) {
-        maxX = Math.min(maxX, opponent.x - MOVE_MIN_GAP);
-      } else {
-        minX = Math.max(minX, opponent.x + MOVE_MIN_GAP);
-      }
+    const newX = Math.min(Math.max(shooter.x + dx, minX), maxX);
+    const actualSpend = Math.abs(newX - shooter.x);
 
-      shooter.x = Math.min(Math.max(shooter.x + mv.dir * MOVE_SPEED * dt, minX), maxX);
-      shooter.y = this.terrainHeightAt(shooter.x);
-      this.updateDistanceUI();
-    }
+    shooter.x = newX;
+    shooter.y = this.terrainHeightAt(shooter.x);
+    this.stamina = Math.max(0, this.stamina - actualSpend);
+    staminaFill.style.width = `${(this.stamina / STAMINA_RANGE) * 100}%`;
+    this.updateDistanceUI();
   }
 
   // Berechnet aus dem aktuellen Drag Distanz + Winkel - vollkommen
@@ -960,6 +924,7 @@ class Game {
 
     this.hasFiredOnce = true;
     aimHint.classList.add("hidden");
+    this.hideMovementControls();
 
     const power = dist * POWER_TO_SPEED;
     const ability = this.activePlayer.character.ability;
@@ -1053,12 +1018,12 @@ class Game {
   nextTurn() {
     this.turn = (this.turn + 1) % 2;
     this.updateHud();
-    this.startMovementWindow();
+    this.showMovementControls();
   }
 
   endGame(winner) {
     this.gameOver = true;
-    this.endMovementWindow();
+    this.hideMovementControls();
     const label = winner === this.players[0] ? "Spieler 1" : "Spieler 2";
     winnerText.textContent = `${label} gewinnt!`;
     winnerScreen.classList.remove("hidden");
@@ -1288,7 +1253,7 @@ function attachInput() {
   };
 
   joystickBase.addEventListener("pointerdown", (e) => {
-    if (!game.movement || !game.movement.active) return;
+    if (game.gameOver || game.projectiles.length > 0) return;
     joystickPointerId = e.pointerId;
     joystickBase.setPointerCapture(e.pointerId);
     joystickBase.classList.add("active");
@@ -1306,8 +1271,6 @@ function attachInput() {
     if (e.pointerId !== joystickPointerId) return;
     releaseJoystick();
   });
-
-  moveSkipBtn.addEventListener("click", () => game.endMovementWindow());
 }
 
 resize();
